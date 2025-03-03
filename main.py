@@ -5,7 +5,7 @@ from math import exp, factorial
 class FootballBettingModel:
     def __init__(self, root):
         self.root = root
-        self.root.title("Momentus Edge")
+        self.root.title("Odds Apex Pro")
         self.create_widgets()
         # History is still maintained for potential future use
         self.history = {
