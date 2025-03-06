@@ -40,7 +40,7 @@ class FootballBettingModel:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        # Fields include the new metrics for pass accuracy and tackle success
+        # Fields with the updated metrics
         self.fields = {
             "Home Avg Goals Scored": tk.DoubleVar(),
             "Home Avg Goals Conceded": tk.DoubleVar(),
@@ -57,10 +57,11 @@ class FootballBettingModel:
             "Away Possession %": tk.DoubleVar(),
             "Home Shots on Target": tk.IntVar(),
             "Away Shots on Target": tk.IntVar(),
-            "Home Pass Accuracy %": tk.DoubleVar(),       # New field
-            "Away Pass Accuracy %": tk.DoubleVar(),       # New field
-            "Home Tackle Success %": tk.DoubleVar(),      # New field
-            "Away Tackle Success %": tk.DoubleVar(),      # New field
+            # New metrics replacing pass accuracy and tackle success:
+            "Home Opp Box Touches": tk.DoubleVar(),
+            "Away Opp Box Touches": tk.DoubleVar(),
+            "Home Corners": tk.DoubleVar(),
+            "Away Corners": tk.DoubleVar(),
             "Account Balance": tk.DoubleVar(),
             "Live Next Goal Odds": tk.DoubleVar()
         }
@@ -79,7 +80,7 @@ class FootballBettingModel:
         reset_button = ttk.Button(self.scrollable_frame, text="Reset Fields", command=self.reset_fields)
         reset_button.grid(row=row+1, column=0, columnspan=2, pady=10)
 
-        # Only the Next Goal recommendation label is kept
+        # Next Goal recommendation label
         self.next_goal_label = ttk.Label(self.scrollable_frame, text="", font=("TkDefaultFont", 10, "bold"))
         self.next_goal_label.grid(row=row+2, column=0, columnspan=2, pady=10)
 
@@ -89,7 +90,6 @@ class FootballBettingModel:
                 var.set(0.0)
             elif isinstance(var, tk.IntVar):
                 var.set(0)
-        # Reset the history dictionary
         self.history = {
             "home_xg": [],
             "away_xg": [],
@@ -167,11 +167,11 @@ class FootballBettingModel:
         home_sot = self.fields["Home Shots on Target"].get()
         away_sot = self.fields["Away Shots on Target"].get()
 
-        # Retrieve new inputs for passes and tackles
-        home_pass_accuracy = self.fields["Home Pass Accuracy %"].get()
-        away_pass_accuracy = self.fields["Away Pass Accuracy %"].get()
-        home_tackle_success = self.fields["Home Tackle Success %"].get()
-        away_tackle_success = self.fields["Away Tackle Success %"].get()
+        # Retrieve new metrics for attacking intent and set pieces
+        home_op_box_touches = self.fields["Home Opp Box Touches"].get()
+        away_op_box_touches = self.fields["Away Opp Box Touches"].get()
+        home_corners = self.fields["Home Corners"].get()
+        away_corners = self.fields["Away Corners"].get()
 
         # Update history (if needed)
         self.update_history("home_xg", home_xg)
@@ -201,12 +201,13 @@ class FootballBettingModel:
         lambda_home *= 1 + (home_sot / 20)
         lambda_away *= 1 + (away_sot / 20)
 
-        # Incorporate adjustments based on pass accuracy and tackle success percentages
-        # Here we assume an average pass accuracy of 75% and tackle success of 50% as baselines
-        lambda_home *= 1 + ((home_pass_accuracy - 75) / 300)
-        lambda_away *= 1 + ((away_pass_accuracy - 75) / 300)
-        lambda_home *= 1 + ((home_tackle_success - 50) / 400)
-        lambda_away *= 1 + ((away_tackle_success - 50) / 400)
+        # Adjust lambda based on touches in the opposition box and corners.
+        # For touches, we use a baseline of 20 and a divisor of 200.
+        lambda_home *= 1 + ((home_op_box_touches - 20) / 200)
+        lambda_away *= 1 + ((away_op_box_touches - 20) / 200)
+        # For corners, we use a baseline of 4 and a divisor of 50.
+        lambda_home *= 1 + ((home_corners - 4) / 50)
+        lambda_away *= 1 + ((away_corners - 4) / 50)
 
         # Calculate match outcome probabilities using the zero-inflated Poisson model
         home_win_probability = 0
@@ -234,33 +235,30 @@ class FootballBettingModel:
         goal_probability = max(0.30, min(0.90, goal_probability))
         fair_next_goal_odds = 1 / goal_probability
 
+        # Build the output text: always show fair odds along with goal probability.
         next_goal_text = f"⚽ Goal Probability: {goal_probability:.2%} → Fair Next Goal Odds: {fair_next_goal_odds:.2f}\n"
-        recommendation_type = None
-        if live_next_goal_odds > 0:
-            edge_back = (live_next_goal_odds - fair_next_goal_odds) / fair_next_goal_odds
+
+        # Only consider lay bets: recommend a lay bet if live odds are lower than fair odds.
+        if live_next_goal_odds > 0 and fair_next_goal_odds > live_next_goal_odds:
             edge_lay = (fair_next_goal_odds - live_next_goal_odds) / fair_next_goal_odds
-
-            kelly_fraction_back = self.dynamic_kelly(edge_back)
-            kelly_fraction_lay = self.dynamic_kelly(edge_lay)
-
-            # Calculate stake for lay bets only
-            liability_lay = account_balance * kelly_fraction_lay
-            stake_lay = liability_lay / (live_next_goal_odds - 1) if edge_lay > 0 else 0
-
-            if fair_next_goal_odds > live_next_goal_odds:
+            if edge_lay > 0:
+                kelly_fraction_lay = self.dynamic_kelly(edge_lay)
+                liability_lay = account_balance * kelly_fraction_lay
+                stake_lay = liability_lay / (live_next_goal_odds - 1) if (live_next_goal_odds - 1) > 0 else 0
                 next_goal_text += f"Lay Next Goal at {live_next_goal_odds:.2f} | Stake: {stake_lay:.2f} | Liability: {liability_lay:.2f}\n"
                 recommendation_type = "lay"
-            elif fair_next_goal_odds < live_next_goal_odds:
-                next_goal_text += f"Back Next Goal at {live_next_goal_odds:.2f} | EXIT\n"
-                recommendation_type = "back"
+            else:
+                next_goal_text += "Not bet found"
+                recommendation_type = "no"
+        else:
+            next_goal_text += "Not bet found"
+            recommendation_type = "no"
 
-        # Update the Next Goal recommendation label only
+        # Set the label color: green if a lay bet is recommended, red otherwise.
         if recommendation_type == "lay":
             self.next_goal_label.config(text=next_goal_text, foreground="green")
-        elif recommendation_type == "back":
-            self.next_goal_label.config(text=next_goal_text, foreground="red")
         else:
-            self.next_goal_label.config(text=next_goal_text)
+            self.next_goal_label.config(text=next_goal_text, foreground="red")
 
 if __name__ == "__main__":
     root = tk.Tk()
